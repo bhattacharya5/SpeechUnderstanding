@@ -2,11 +2,12 @@ import os
 import librosa
 import numpy as np
 import torch
+import random
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import roc_auc_score, roc_curve
 from scipy.optimize import brentq
 from scipy.interpolate import interp1d
-from model import SSLModel  # Adjust this import based on the actual model class
+from model import Model  # Adjust this import based on the actual model class
 
 # Assuming process_Rawboost_feature is a function to process audio features
 from data_utils_SSL import process_Rawboost_feature, pad
@@ -15,8 +16,15 @@ from data_utils_SSL import process_Rawboost_feature, pad
 def load_dataset(data_dir, numb_files):
     fake_files = [os.path.join(data_dir, "Fake", f) for f in os.listdir(os.path.join(data_dir, "Fake")) if f.endswith('.mp3')]
     real_files = [os.path.join(data_dir, "Real", f) for f in os.listdir(os.path.join(data_dir, "Real")) if f.endswith('.mp3')]
-    files = fake_files[:numb_files] + real_files[:numb_files]
-    labels = [1] * len(fake_files) + [0] * len(real_files)  # 1 for fake, 0 for real
+    
+    # Randomly sample files if the number of available files is greater than numb_files
+    if len(fake_files) > numb_files:
+        fake_files = random.sample(fake_files, numb_files)
+    if len(real_files) > numb_files:
+        real_files = random.sample(real_files, numb_files)
+    
+    files = fake_files + real_files
+    labels = [1] * numb_files + [0] * numb_files  # Corrected label assignment
     return files, labels
 
 # Custom Dataset Class
@@ -39,8 +47,14 @@ class CustomDataset(Dataset):
         return torch.tensor(audio_padded, dtype=torch.float32), label
 
 def load_pretrained_model(model_path, device):
+
+    # Create a minimal mock args object
+    class Args:
+        pass  # Add any expected attributes here if needed
+
+    args = Args()
     
-    model = SSLModel(device=device)
+    model = Model(args=args,device=device)
 
     # Load the pre-trained model state dictionary
     pretrained_dict = torch.load(model_path, map_location=device)
@@ -77,7 +91,7 @@ def evaluate_model(model, dataloader, device):
 def main():
     data_dir = "Dataset_Speech_Assignment"
     model_path = "Best_LA_model_for_DF.pth"
-    numb_files = 1
+    numb_files = 10
     files, labels = load_dataset(data_dir, numb_files)
     dataset = CustomDataset(files, labels)
     dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
