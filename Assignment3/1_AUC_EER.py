@@ -1,77 +1,96 @@
-import collections
+import os
+import librosa
+import numpy as np
 import torch
-import torchaudio
-from sklearn.metrics import roc_auc_score
-from sklearn.metrics import roc_curve
+from torch.utils.data import Dataset, DataLoader
+from sklearn.metrics import roc_auc_score, roc_curve
 from scipy.optimize import brentq
 from scipy.interpolate import interp1d
-import numpy as np
-import os
-from model import SSLModel 
+from model import SSLModel  # Adjust this import based on the actual model class
 
-# Function to load the dataset
-def load_dataset(data_dir):
-    fake_files = [os.path.join(data_dir, "Fake", f) for f in os.listdir(os.path.join(data_dir, "Fake"))]
-    real_files = [os.path.join(data_dir, "Real", f) for f in os.listdir(os.path.join(data_dir, "Real"))]
-    files = fake_files + real_files
+# Assuming process_Rawboost_feature is a function to process audio features
+from data_utils_SSL import process_Rawboost_feature, pad
+
+# Dataset loader function
+def load_dataset(data_dir, numb_files):
+    fake_files = [os.path.join(data_dir, "Fake", f) for f in os.listdir(os.path.join(data_dir, "Fake")) if f.endswith('.mp3')]
+    real_files = [os.path.join(data_dir, "Real", f) for f in os.listdir(os.path.join(data_dir, "Real")) if f.endswith('.mp3')]
+    files = fake_files[:numb_files] + real_files[:numb_files]
     labels = [1] * len(fake_files) + [0] * len(real_files)  # 1 for fake, 0 for real
     return files, labels
 
-# Function to preprocess audio
-def preprocess_audio(audio_file):
-    waveform, sample_rate = torchaudio.load(audio_file)
-    # Preprocess the waveform if needed (e.g., normalization)
-    return waveform, sample_rate
+# Custom Dataset Class
+class CustomDataset(Dataset):
+    def __init__(self, files, labels):
+        self.files = files
+        self.labels = labels
 
-# Load the pretrained model
-model_path = "Best_LA_model_for_DF.pth"
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-'''
-# Load the model
-if torch.cuda.is_available():
-    model = torch.load(model_path)
-else:
-    model = torch.load(model_path, map_location=device)
+    def __len__(self):
+        return len(self.files)
 
-#print(model)
-# Check if the model is an OrderedDict (indicating it was loaded as state_dict)
-if isinstance(model, collections.OrderedDict):
-    # Create an instance of the model class and load the state_dict
-    model_class = Model()
-    model_class.load_state_dict(model)
-    model = model_class
+    def __getitem__(self, idx):
+        file_path = self.files[idx]
+        label = self.labels[idx]
+        # Load and process your .mp3 file here
+        audio, sr = librosa.load(file_path, sr=16000)
+        # Process audio file (e.g., feature extraction)
+        audio_processed = process_Rawboost_feature(audio, sr, args=None, algo=None)  # Adjust args and algo as needed
+        audio_padded = pad(audio_processed)
+        return torch.tensor(audio_padded, dtype=torch.float32), label
 
-model.eval()
-'''
-model = SSLModel(device=device)
-model.load_state_dict(torch.load(model_path, map_location=device))
-#model.eval()
+def load_pretrained_model(model_path, device):
+    
+    model = SSLModel(device=device)
 
+    # Load the pre-trained model state dictionary
+    pretrained_dict = torch.load(model_path, map_location=device)
+    
+    # Filter out unnecessary keys
+    model_dict = model.state_dict()
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+    
+    # Update the current model's state dictionary with the filtered state dictionary
+    model_dict.update(pretrained_dict) 
+    model.load_state_dict(model_dict)
 
-# Load the dataset
-data_dir = "Dataset_Speech_Assignment"
-files, labels = load_dataset(data_dir)
+    return model
 
-# Lists to store predictions and true labels
-predictions = []
-true_labels = []
-
-# Make predictions on the dataset
-for file, label in zip(files, labels):
-    waveform, _ = preprocess_audio(file)
+# Function to evaluate the model and calculate AUC and EER
+def evaluate_model(model, dataloader, device):
+    y_true = []
+    y_scores = []
     with torch.no_grad():
-        output = model(waveform.unsqueeze(0))  # Assuming the model expects a batch dimension
-    prediction = torch.sigmoid(output).item()  # Assuming the model outputs logits
-    predictions.append(prediction)
-    true_labels.append(label)
+        for inputs, labels in dataloader:
+            inputs = inputs.to(device)
+            outputs = model(inputs)
+            # Assuming the model outputs logits for two classes
+            scores = torch.softmax(outputs, dim=1)[:, 1].cpu().numpy()
+            y_scores.extend(scores)
+            y_true.extend(labels.numpy())
+    
+    auc = roc_auc_score(y_true, y_scores)
+    fpr, tpr, thresholds = roc_curve(y_true, y_scores)
+    eer = brentq(lambda x: 1. - x - interp1d(fpr, tpr)(x), 0., 1.)
+    return auc, eer
 
-# Calculate AUC
-auc = roc_auc_score(true_labels, predictions)
+# Main function
+def main():
+    data_dir = "Dataset_Speech_Assignment"
+    model_path = "Best_LA_model_for_DF.pth"
+    numb_files = 1
+    files, labels = load_dataset(data_dir, numb_files)
+    dataset = CustomDataset(files, labels)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Calculate EER
-fpr, tpr, thresholds = roc_curve(true_labels, predictions, pos_label=1)
-eer = brentq(lambda x : 1. - x - interp1d(fpr, tpr)(x), 0., 1.)
-thresh = interp1d(fpr, thresholds)(eer)
+    #checkpoint = torch.load(model_path, map_location=device)
+    #print("Keys in checkpoint:", checkpoint.keys())
 
-print("AUC:", auc)
-print("EER:", eer)
+    model = load_pretrained_model(model_path, device)    
+    
+    auc, eer = evaluate_model(model, dataloader, device)
+    print(f"AUC: {auc}, EER: {eer}")
+
+if __name__ == "__main__":
+    main()
