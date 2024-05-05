@@ -87,6 +87,7 @@ def evaluate_model(model, dataloader, device):
     eer = brentq(lambda x: 1. - x - interp1d(fpr, tpr)(x), 0., 1.)
     return auc, eer
 
+'''
 # Train model function
 def train_model(model, train_loader, val_loader, criterion, optimizer, device, epochs):
     best_val_loss = float('inf')
@@ -111,6 +112,37 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, e
             print("Best model saved")
             best_val_loss = val_loss
             torch.save(model.state_dict(), "best_model.pth")
+'''
+
+def train_model(model, train_loader, val_loader, criterion, optimizer, device, epochs):
+    best_val_auc = float('-inf')  # Initialize best validation AUC
+    best_model_state_dict = None   # Initialize best model state dictionary
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+        
+        # Validate the model
+        val_auc, _ = evaluate_model(model, val_loader, device)
+        print(f"Epoch {epoch+1}, Training Loss: {running_loss / len(train_loader)}, Validation AUC: {val_auc}")
+        
+        # Save the model if validation AUC improves
+        if val_auc > best_val_auc:
+            print("Best model saved")
+            best_val_auc = val_auc
+            best_model_state_dict = model.state_dict()
+
+    # Save the best model after all epochs
+    if best_model_state_dict is not None:
+        torch.save(best_model_state_dict, "best_model.pth")
+
 
 def main():
     training_data_dir = "for-2sec/for-2seconds/training"
