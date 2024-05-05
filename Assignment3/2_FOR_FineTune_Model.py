@@ -88,7 +88,7 @@ def evaluate_model(model, dataloader, device):
     return auc, eer
 
 # Train model function
-def train_model(model, train_loader, val_loader, criterion, optimizer, device, epochs=1):
+def train_model(model, train_loader, val_loader, criterion, optimizer, device, epochs):
     best_val_loss = float('inf')
     for epoch in range(epochs):
         model.train()
@@ -102,8 +102,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, e
             optimizer.step()
             running_loss += loss.item()
         
-        # Validate the model
-        val_loss = evaluate_model(model, val_loader, device)
+        # Validate the model if AUC improves
+        val_loss, _ = evaluate_model(model, val_loader, device)
         print(f"Epoch {epoch+1}, Training Loss: {running_loss / len(train_loader)}, Validation Loss: {val_loss}")
         
         # Save the model if validation loss improves
@@ -143,7 +143,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     print("Model Training Started.")
     # Train the model
-    train_model(model, train_loader, val_loader, criterion, optimizer, device)
+    train_model(model, train_loader, val_loader, criterion, optimizer, device, epochs=10)
     print("Model training completed.")
     # Evaluate the model on test data
     auc, eer = evaluate_model(model, test_loader, device)
